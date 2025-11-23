@@ -1,13 +1,10 @@
 import os
 import shutil
+import argparse # Library for parsing command-line arguments
 
-def extract_images(source_folder, target_folder, step=5):
+def extract_images(source_folder, target_folder, step):
     """
     Extracts one image every 'step' images from the source folder and copies it to the target folder.
-    
-    :param source_folder: Path to the directory containing original images.
-    :param target_folder: Path to the directory where sampled images will be saved.
-    :param step: Sampling interval (default is every 5th image).
     """
     
     # 1. Define supported image formats
@@ -34,9 +31,7 @@ def extract_images(source_folder, target_folder, step=5):
 
     image_files = [f for f in all_files if f.lower().endswith(valid_extensions)]
     
-    # 5. Sort files (Critical!)
-    # Sorting ensures that the sampling corresponds to the file order (e.g., 001, 002, 003...)
-    # otherwise, os.listdir might return files in random order.
+    # 5. Sort files (Critical for consistent sampling)
     image_files.sort()
     
     total_images = len(image_files)
@@ -44,9 +39,7 @@ def extract_images(source_folder, target_folder, step=5):
         print("⚠️ No image files found in the source folder.")
         return
 
-    # 6. Core logic: Python list slicing
-    # Syntax: list[start:end:step]
-    # This takes the 0th, 5th, 10th, 15th... items.
+    # 6. Core logic: List slicing [start:end:step]
     selected_images = image_files[::step]
 
     print(f"📊 Found {total_images} images. Extracting {len(selected_images)} images (1 out of every {step})...")
@@ -58,24 +51,28 @@ def extract_images(source_folder, target_folder, step=5):
         dst_path = os.path.join(target_folder, filename)
         
         try:
-            # shutil.copy2 preserves metadata (creation time, etc.)
             shutil.copy2(src_path, dst_path)
-            # print(f"✅ Copied: {filename}") # Uncomment this line to see details for every file
             count += 1
         except Exception as e:
             print(f"❌ Failed to copy {filename}: {e}")
 
     print(f"\n🎉 Done! Successfully copied {count} images to '{target_folder}'")
 
-# ================= Configuration Area =================
+# ================= Command Line Argument Parsing =================
 if __name__ == "__main__":
-    # 👇 Source directory (Where your original images are)
-    # Note for Windows: Use r"" string to handle backslashes correctly
-    src_dir = r"C:\Users\YourName\Downloads\All_Images"
+    # Initialize the parser
+    parser = argparse.ArgumentParser(description="Script to sample images from a folder.")
+
+    # Add arguments
+    # 'source' and 'target' are positional arguments (required)
+    parser.add_argument("source", type=str, help="Path to the source folder containing images.")
+    parser.add_argument("target", type=str, help="Path to the target folder to save sampled images.")
     
-    # 👇 Destination directory (Where sampled images will go)
-    # The script will create this folder if it doesn't exist
-    dst_dir = r"C:\Users\YourName\Downloads\Sampled_Images"
-    
-    # Run extraction: 1 image every 5 images
-    extract_images(src_dir, dst_dir, step=5)
+    # '--step' is an optional argument (default is 5)
+    parser.add_argument("--step", type=int, default=5, help="Sampling interval (e.g., 5 means take 1 image every 5 images).")
+
+    # Parse the arguments passed from the command line
+    args = parser.parse_args()
+
+    # Run the function with parsed arguments
+    extract_images(args.source, args.target, args.step)
