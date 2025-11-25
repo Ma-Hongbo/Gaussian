@@ -65,7 +65,7 @@ def modify_pano_ids(content):
 
 def replace_frame(content):
     """Replace all '/frame' with '_frame'"""
-    return content.replace('/frame', '_frame')
+    return content.replace('/', '_')
 
 def process_images_txt(file_path):
     """Run all modification steps on the given images.txt file"""
@@ -250,4 +250,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
