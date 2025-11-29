@@ -1,44 +1,88 @@
 import cv2
 import os
-import math
 import argparse
+import re
+from collections import defaultdict
 from tqdm import tqdm
 
 # ================= DEFAULT CONFIGURATION =================
-# These are used if you don't provide arguments via command line
 DEFAULT_FPS = 10
-DEFAULT_NUM_VIDEOS = 12
-DEFAULT_PATTERN_TRAIN = 7
-DEFAULT_PATTERN_TEST = 1
 # =======================================================
 
-def get_image_files(directory):
+def parse_filename(filename):
     """
-    Retrieves all image files from a directory and sorts them by filename.
+    Parses the filename to extract camera ID and iteration number.
+    Expected format: pano_camera{i}_{xxxx}.png
+    Example: pano_camera0_00001.png
+    
+    Returns:
+        camera_id (str): e.g., "pano_camera0"
+        iteration (int): e.g., 1
     """
-    if not os.path.exists(directory):
-        raise FileNotFoundError(f"Directory not found: {directory}")
+    # Regex to match "pano_camera" followed by digits (Group 1), 
+    # then an underscore, then digits (Group 2)
+    # Adjust regex if your filename prefix is slightly different
+    match = re.search(r"(pano_camera\d+)_(\d+)", filename)
+    
+    if match:
+        camera_id = match.group(1) # e.g., pano_camera0
+        iteration = int(match.group(2)) # e.g., 00001 -> 1
+        return camera_id, iteration
+    return None, None
 
+def get_grouped_images(directories):
+    """
+    Scans multiple directories, parses filenames, and groups them by Camera ID.
+    
+    Returns:
+        dict: { "pano_camera0": [(iter, filepath), ...], "pano_camera1": [...] }
+    """
     valid_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-    # List comprehension to filter files by extension
-    files = [
-        os.path.join(directory, f) 
-        for f in os.listdir(directory) 
-        if os.path.splitext(f)[1].lower() in valid_extensions
-    ]
-    # Sort files naturally/alphabetically to ensure correct sequence
-    files.sort(key=lambda x: x.lower())
-    return files
+    grouped_files = defaultdict(list)
 
-def create_video_from_paths(image_paths, output_path, fps):
+    for directory in directories:
+        if not os.path.exists(directory):
+            print(f"Warning: Directory not found: {directory}")
+            continue
+        
+        print(f"Scanning directory: {directory} ...")
+        files = os.listdir(directory)
+        
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in valid_extensions:
+                full_path = os.path.join(directory, f)
+                
+                # Parse the filename
+                camera_id, iteration = parse_filename(f)
+                
+                if camera_id is not None:
+                    # Store as tuple (iteration, full_path) for sorting later
+                    grouped_files[camera_id].append((iteration, full_path))
+                else:
+                    # Optional: Print warning if file doesn't match pattern
+                    # print(f"Skipping non-matching file: {f}")
+                    pass
+
+    return grouped_files
+
+def create_video_for_camera(camera_id, image_data_list, output_dir, fps):
     """
-    Generates an MP4 video from a list of image paths.
+    Generates a video for a specific camera, sorted by iteration.
     """
+    # 1. Sort by iteration number (the first element of the tuple)
+    # This merges train and test images into a single timeline based on 'xxxx'
+    image_data_list.sort(key=lambda x: x[0])
+    
+    # Extract just the file paths after sorting
+    image_paths = [item[1] for item in image_data_list]
+
     if not image_paths:
-        print(f"Warning: No images for {output_path}, skipping.")
         return
 
-    # Read the first image to determine video resolution
+    output_path = os.path.join(output_dir, f"{camera_id}.mp4")
+
+    # Read first image to get dimensions
     first_img = cv2.imread(image_paths[0])
     if first_img is None:
         print(f"Error: Could not read image {image_paths[0]}")
@@ -47,104 +91,62 @@ def create_video_from_paths(image_paths, output_path, fps):
     height, width, layers = first_img.shape
     size = (width, height)
 
-    # Initialize VideoWriter using mp4v codec
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, size)
 
-    print(f"Processing: {output_path} ({len(image_paths)} frames)...")
+    print(f"Processing Video: {camera_id} ({len(image_paths)} frames)...")
     
-    # Use tqdm for a progress bar
-    for img_path in tqdm(image_paths, leave=False):
+    for img_path in tqdm(image_paths, leave=False, desc=camera_id):
         img = cv2.imread(img_path)
         if img is None:
-            print(f"Warning: Skipping corrupted image {img_path}")
             continue
-            
-        # Resize image if dimensions do not match the first frame
+        
+        # Resize if necessary
         if (img.shape[1], img.shape[0]) != size:
             img = cv2.resize(img, size)
             
         out.write(img)
 
     out.release()
-    print(f"Done: {output_path}")
+    print(f"Saved: {output_path}")
 
 def parse_args():
-    """
-    Parses command line arguments.
-    """
-    parser = argparse.ArgumentParser(description="Merge train and test renders into sequential videos.")
+    parser = argparse.ArgumentParser(description="Merge train/test images into videos grouped by Camera ID.")
     
-    # Required arguments for paths
-    parser.add_argument("--train_dir", type=str, required=True, help="Path to the folder containing training images")
-    parser.add_argument("--test_dir", type=str, required=True, help="Path to the folder containing testing images")
-    parser.add_argument("--out_dir", type=str, required=True, help="Path to save the generated videos")
-
-    # Optional arguments (with defaults)
+    parser.add_argument("--train_dir", type=str, required=True, help="Path to training images")
+    parser.add_argument("--test_dir", type=str, required=True, help="Path to testing images")
+    parser.add_argument("--out_dir", type=str, required=True, help="Path to save output videos")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS, help=f"Frames per second (default: {DEFAULT_FPS})")
-    parser.add_argument("--num_videos", type=int, default=DEFAULT_NUM_VIDEOS, help=f"Number of video splits (default: {DEFAULT_NUM_VIDEOS})")
     
     return parser.parse_args()
 
 def main():
-    # 1. Parse arguments
     args = parse_args()
 
-    # 2. Create output directory if it doesn't exist
+    # 1. Prepare output dir
     if not os.path.exists(args.out_dir):
-        print(f"Creating output directory: {args.out_dir}")
         os.makedirs(args.out_dir)
 
-    # 3. Load and sort file lists
-    print("Reading file lists...")
-    try:
-        train_files = get_image_files(args.train_dir)
-        test_files = get_image_files(args.test_dir)
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        return
+    # 2. Group images from both directories
+    # We pass a list of directories to scan
+    grouped_data = get_grouped_images([args.train_dir, args.test_dir])
     
-    print(f"Found Train images: {len(train_files)}")
-    print(f"Found Test images: {len(test_files)}")
+    sorted_camera_ids = sorted(grouped_data.keys())
+    print(f"\nFound {len(sorted_camera_ids)} unique cameras: {sorted_camera_ids}")
 
-    # 4. Interleave images based on the 7:1 pattern
-    full_sequence = []
-    t_idx = 0
-    v_idx = 0
-    
-    # Loop until we run out of images in the shorter list or train list is exhausted
-    while t_idx < len(train_files) and v_idx < len(test_files):
-        # Add a chunk of train images
-        chunk_train = train_files[t_idx : t_idx + DEFAULT_PATTERN_TRAIN]
-        full_sequence.extend(chunk_train)
-        t_idx += len(chunk_train)
-        
-        # Add a chunk of test images
-        if v_idx < len(test_files):
-            full_sequence.append(test_files[v_idx])
-            v_idx += DEFAULT_PATTERN_TEST
-
-    total_frames = len(full_sequence)
-    print(f"Total merged frames: {total_frames}")
-    
-    if total_frames == 0:
-        print("Error: Not enough images to merge.")
+    if len(sorted_camera_ids) == 0:
+        print("Error: No valid images found matching 'pano_camera{i}_{xxxx}' pattern.")
         return
 
-    # 5. Split the full sequence into parts
-    frames_per_video = math.ceil(total_frames / args.num_videos)
-    
-    for i in range(args.num_videos):
-        start_idx = i * frames_per_video
-        end_idx = min((i + 1) * frames_per_video, total_frames)
-        
-        if start_idx >= total_frames:
-            break
-            
-        batch_paths = full_sequence[start_idx:end_idx]
-        output_name = os.path.join(args.out_dir, f"video_{i+1:02d}.mp4")
-        
-        create_video_from_paths(batch_paths, output_name, args.fps)
+    # 3. Generate one video per camera
+    print("\nStarting video generation...")
+    for camera_id in sorted_camera_ids:
+        create_video_for_camera(
+            camera_id, 
+            grouped_data[camera_id], 
+            args.out_dir, 
+            args.fps
+        )
 
     print("\nAll videos processed successfully!")
 
